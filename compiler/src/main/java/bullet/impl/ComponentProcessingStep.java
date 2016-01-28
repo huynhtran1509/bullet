@@ -21,11 +21,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.annotation.Annotation;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Set;
-import java.util.TreeMap;
+import java.util.*;
 
 import javax.annotation.Generated;
 import javax.annotation.processing.ProcessingEnvironment;
@@ -73,7 +69,7 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
   }
 
   @Override
-  public void process(SetMultimap<Class<? extends Annotation>, Element> elementsByAnnotation) {
+  public Set<Element> process(SetMultimap<Class<? extends Annotation>, Element> elementsByAnnotation) {
     Set<Element> componentElements = Sets.union(
         elementsByAnnotation.get(Component.class),
         elementsByAnnotation.get(Subcomponent.class));
@@ -82,6 +78,8 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
       TypeElement componentElement = MoreElements.asType(element);
       generateObjectGraph(componentElement);
     }
+
+    return Sets.newHashSet();
   }
 
   private void generateObjectGraph(TypeElement element) {
