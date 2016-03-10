@@ -264,7 +264,6 @@ public abstract class AbstractComponentProcessorTest {
          *  - C before B (as C extends B)
          *  - D before I2 (as D implements I2)
          *  - I2 before I (as I2 extends I)
-         *  - A before B, C and D; and D after A, B and C (natural ordering of names)
          */
         "  public <T> T inject(final T instance) {",
         "    if (instance instanceof A) {",
@@ -275,12 +274,12 @@ public abstract class AbstractComponentProcessorTest {
         "      this.component.inject((C) instance);",
         "      return instance;",
         "    }",
-        "    if (instance instanceof B) {",
-        "      this.component.inject((B) instance);",
-        "      return instance;",
-        "    }",
         "    if (instance instanceof D) {",
         "      this.component.inject((D) instance);",
+        "      return instance;",
+        "    }",
+        "    if (instance instanceof B) {",
+        "      this.component.inject((B) instance);",
         "      return instance;",
         "    }",
         "    if (instance instanceof I2) {",
@@ -374,16 +373,16 @@ public abstract class AbstractComponentProcessorTest {
          *  - C before A (as C extends A)
          */
         "  public <T> T inject(final T instance) {",
+        "    if (instance instanceof B) {",
+        "      this.component.inject((B) instance);",
+        "      return instance;",
+        "    }",
         "    if (instance instanceof C) {",
         "      this.component.inject((C) instance);",
         "      return instance;",
         "    }",
         "    if (instance instanceof A) {",
         "      this.component.inject((A) instance);",
-        "      return instance;",
-        "    }",
-        "    if (instance instanceof B) {",
-        "      this.component.inject((B) instance);",
         "      return instance;",
         "    }",
         "    throw new IllegalArgumentException();",

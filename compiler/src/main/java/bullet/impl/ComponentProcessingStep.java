@@ -22,10 +22,10 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 
 import javax.annotation.Generated;
 import javax.annotation.processing.ProcessingEnvironment;
@@ -44,7 +44,9 @@ import com.google.auto.common.MoreTypes;
 import com.google.auto.common.Visibility;
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
+import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
 import com.google.common.collect.Sets;
 import com.squareup.javapoet.AnnotationSpec;
@@ -54,6 +56,11 @@ import com.squareup.javapoet.MethodSpec;
 import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeSpec;
 import com.squareup.javapoet.TypeVariableName;
+
+import org.jgrapht.DirectedGraph;
+import org.jgrapht.graph.DefaultDirectedGraph;
+import org.jgrapht.graph.DefaultEdge;
+import org.jgrapht.traverse.TopologicalOrderIterator;
 
 import bullet.impl.ComponentMethodDescriptor.ComponentMethodKind;
 import dagger.Component;
@@ -87,7 +94,10 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
   private void generateObjectGraph(TypeElement element) {
     DeclaredType component = MoreTypes.asDeclared(element.asType());
     ArrayList<ComponentMethodDescriptor> provisionMethods = new ArrayList<>();
-    ArrayList<ComponentMethodDescriptor> membersInjectionMethods = new ArrayList<>();
+    DirectedGraph<ComponentMethodDescriptor, DefaultEdge> memberInjectorsTypeGraph =
+        new DefaultDirectedGraph<>(DefaultEdge.class);
+    Map<TypeMirror, ComponentMethodDescriptor> memberInjectionMethodsTypeDescriptorMap = new HashMap<>();
+    Multimap<TypeMirror, ComponentMethodDescriptor> potentialPendingEdges = HashMultimap.create();
 
     PackageElement packageElement = processingEnv.getElementUtils().getPackageOf(element);
     TypeElement objectElement = processingEnv.getElementUtils().getTypeElement(Object.class.getCanonicalName());
@@ -114,34 +124,31 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
           break;
         case SIMPLE_MEMBERS_INJECTION:
         case MEMBERS_INJECTOR:
-          membersInjectionMethods.add(methodDescriptor);
+          memberInjectorsTypeGraph.addVertex(methodDescriptor);
+          memberInjectionMethodsTypeDescriptorMap.put(methodDescriptor.type(), methodDescriptor);
+
+          for (ComponentMethodDescriptor pendingChild : potentialPendingEdges.get(methodDescriptor.type())) {
+            memberInjectorsTypeGraph.addEdge(pendingChild, methodDescriptor);
+          }
+
+          DeclaredType declaredType = (DeclaredType) methodDescriptor.type();
+          TypeElement typeElement = (TypeElement) declaredType.asElement();
+
+          List<TypeMirror> parents = new ArrayList<>(typeElement.getInterfaces());
+          parents.add(typeElement.getSuperclass());
+          for (TypeMirror parent : parents) {
+            ComponentMethodDescriptor parentDescriptor = memberInjectionMethodsTypeDescriptorMap.get(parent);
+            if (parentDescriptor == null) {
+              potentialPendingEdges.put(parent, methodDescriptor);
+            } else {
+              memberInjectorsTypeGraph.addEdge(methodDescriptor, parentDescriptor);
+            }
+          }
           break;
         default:
           throw new AssertionError();
       }
     }
-
-    // Order members-injection methods from most-specific to least-specific types, for cascading ifs of instanceof.
-    Collections.sort(membersInjectionMethods, new Comparator<ComponentMethodDescriptor>() {
-      final javax.lang.model.util.Types typeUtils = processingEnv.getTypeUtils();
-
-      @Override
-      public int compare(ComponentMethodDescriptor o1, ComponentMethodDescriptor o2) {
-        TypeMirror t1 = o1.type(), t2 = o2.type();
-        if (typeUtils.isSameType(t1, t2)) {
-          return 0;
-        } else if (typeUtils.isSubtype(t1, t2)) {
-          return -1;
-        } else if (typeUtils.isSubtype(t2, t1)) {
-          return 1;
-        }
-        return getName(t1).compareTo(getName(t2));
-      }
-
-      private String getName(TypeMirror type) {
-        return MoreElements.asType(typeUtils.asElement(type)).getQualifiedName().toString();
-      }
-    });
 
     final ClassName elementName = ClassName.get(element);
 
@@ -185,7 +192,10 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
         .addTypeVariable(t)
         .returns(t)
         .addParameter(t, "instance", FINAL);
-    for (ComponentMethodDescriptor method : membersInjectionMethods) {
+    TopologicalOrderIterator<ComponentMethodDescriptor, DefaultEdge> topologicalOrderIterator =
+        new TopologicalOrderIterator<>(memberInjectorsTypeGraph);
+    while (topologicalOrderIterator.hasNext()) {
+      ComponentMethodDescriptor method = topologicalOrderIterator.next();
       injectWriter.addCode(
           "if (instance instanceof $T) {\n$>" +
           "this.component.$N$L(($T) instance);\n" +
