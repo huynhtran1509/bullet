@@ -33,14 +33,14 @@
       <optional>true</optional>
     </dependency>
     <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>19.0</version>
+    </dependency>
+    <dependency>
       <groupId>org.jgrapht</groupId>
       <artifactId>jgrapht-core</artifactId>
       <version>0.9.1</version>
-    </dependency>
-    <dependency>
-      <groupId>com.google.guava</groupId>
-      <artifactId>guava</artifactId>
-      <version>18.0</version>
     </dependency>
 
     <dependency>
@@ -80,6 +80,7 @@
               <exclude>com.google.auto.service:auto-service</exclude>
               <exclude>com.google.auto.value:auto-value</exclude>
               <exclude>com.google.dagger:dagger</exclude>
+              <exclude>com.google.guava</exclude>
               <exclude>javax.inject:javax.inject</exclude>
             </excludes>
           </artifactSet>
@@ -91,6 +92,10 @@
             <relocation>
               <pattern>com.squareup</pattern>
               <shadedPattern>bullet.thirdparty.com.squareup</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.jgrapht</pattern>
+              <shadedPattern>bullet.thirdparty.org.jgrapht</shadedPattern>
             </relocation>
           </relocations>
         </configuration>

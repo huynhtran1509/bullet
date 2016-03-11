@@ -94,10 +94,10 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
   private void generateObjectGraph(TypeElement element) {
     DeclaredType component = MoreTypes.asDeclared(element.asType());
     ArrayList<ComponentMethodDescriptor> provisionMethods = new ArrayList<>();
-    DirectedGraph<ComponentMethodDescriptor, DefaultEdge> memberInjectorsTypeGraph =
+    DirectedGraph<ComponentMethodDescriptor, DefaultEdge> memberInjectionTypeGraph =
         new DefaultDirectedGraph<>(DefaultEdge.class);
-    Map<TypeMirror, ComponentMethodDescriptor> memberInjectionMethodsTypeDescriptorMap = new HashMap<>();
-    Multimap<TypeMirror, ComponentMethodDescriptor> potentialPendingEdges = HashMultimap.create();
+    Map<TypeMirrorWrapper, ComponentMethodDescriptor> memberInjectionMethodsTypeDescriptorMap = new HashMap<>();
+    Multimap<TypeMirrorWrapper, ComponentMethodDescriptor> potentialPendingEdges = HashMultimap.create();
 
     PackageElement packageElement = processingEnv.getElementUtils().getPackageOf(element);
     TypeElement objectElement = processingEnv.getElementUtils().getTypeElement(Object.class.getCanonicalName());
@@ -124,24 +124,26 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
           break;
         case SIMPLE_MEMBERS_INJECTION:
         case MEMBERS_INJECTOR:
-          memberInjectorsTypeGraph.addVertex(methodDescriptor);
-          memberInjectionMethodsTypeDescriptorMap.put(methodDescriptor.type(), methodDescriptor);
+          memberInjectionTypeGraph.addVertex(methodDescriptor);
+          TypeMirrorWrapper wrapper = new TypeMirrorWrapper(methodDescriptor.type());
+          memberInjectionMethodsTypeDescriptorMap.put(wrapper, methodDescriptor);
 
-          for (ComponentMethodDescriptor pendingChild : potentialPendingEdges.get(methodDescriptor.type())) {
-            memberInjectorsTypeGraph.addEdge(pendingChild, methodDescriptor);
+          for (ComponentMethodDescriptor pendingChild : potentialPendingEdges.get(wrapper)) {
+            memberInjectionTypeGraph.addEdge(pendingChild, methodDescriptor);
           }
 
-          DeclaredType declaredType = (DeclaredType) methodDescriptor.type();
-          TypeElement typeElement = (TypeElement) declaredType.asElement();
+          DeclaredType declaredType = MoreTypes.asDeclared(methodDescriptor.type());
+          TypeElement typeElement = MoreElements.asType(declaredType.asElement());
 
           List<TypeMirror> parents = new ArrayList<>(typeElement.getInterfaces());
           parents.add(typeElement.getSuperclass());
           for (TypeMirror parent : parents) {
-            ComponentMethodDescriptor parentDescriptor = memberInjectionMethodsTypeDescriptorMap.get(parent);
+            TypeMirrorWrapper parentWrapper = new TypeMirrorWrapper(parent);
+            ComponentMethodDescriptor parentDescriptor = memberInjectionMethodsTypeDescriptorMap.get(parentWrapper);
             if (parentDescriptor == null) {
-              potentialPendingEdges.put(parent, methodDescriptor);
+              potentialPendingEdges.put(parentWrapper, methodDescriptor);
             } else {
-              memberInjectorsTypeGraph.addEdge(methodDescriptor, parentDescriptor);
+              memberInjectionTypeGraph.addEdge(methodDescriptor, parentDescriptor);
             }
           }
           break;
@@ -193,7 +195,7 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
         .returns(t)
         .addParameter(t, "instance", FINAL);
     TopologicalOrderIterator<ComponentMethodDescriptor, DefaultEdge> topologicalOrderIterator =
-        new TopologicalOrderIterator<>(memberInjectorsTypeGraph);
+        new TopologicalOrderIterator<>(memberInjectionTypeGraph);
     while (topologicalOrderIterator.hasNext()) {
       ComponentMethodDescriptor method = topologicalOrderIterator.next();
       injectWriter.addCode(
@@ -232,6 +234,33 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
         return false;
       default:
         throw new AssertionError();
+    }
+  }
+
+  class TypeMirrorWrapper {
+    private final TypeMirror typeMirror;
+
+    TypeMirrorWrapper(TypeMirror typeMirror) {
+      this.typeMirror = typeMirror;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      TypeMirrorWrapper that = (TypeMirrorWrapper) o;
+
+      return processingEnv.getTypeUtils().isSameType(typeMirror, that.typeMirror);
+    }
+
+    @Override
+    public int hashCode() {
+      return typeMirror == null ? 0 : typeMirror.hashCode();
     }
   }
 }
