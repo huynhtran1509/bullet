@@ -42,6 +42,7 @@ import com.google.auto.common.BasicAnnotationProcessor;
 import com.google.auto.common.MoreElements;
 import com.google.auto.common.MoreTypes;
 import com.google.auto.common.Visibility;
+import com.google.common.base.Equivalence;
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.collect.HashMultimap;
@@ -96,8 +97,8 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
     ArrayList<ComponentMethodDescriptor> provisionMethods = new ArrayList<>();
     DirectedGraph<ComponentMethodDescriptor, DefaultEdge> memberInjectionTypeGraph =
         new DefaultDirectedGraph<>(DefaultEdge.class);
-    Map<TypeMirrorWrapper, ComponentMethodDescriptor> memberInjectionMethodsTypeDescriptorMap = new HashMap<>();
-    Multimap<TypeMirrorWrapper, ComponentMethodDescriptor> potentialPendingEdges = HashMultimap.create();
+    Map<Equivalence.Wrapper<TypeMirror>, ComponentMethodDescriptor> memberInjectionMethodsTypeDescriptorMap = new HashMap<>();
+    Multimap<Equivalence.Wrapper<TypeMirror>, ComponentMethodDescriptor> potentialPendingEdges = HashMultimap.create();
 
     PackageElement packageElement = processingEnv.getElementUtils().getPackageOf(element);
     TypeElement objectElement = processingEnv.getElementUtils().getTypeElement(Object.class.getCanonicalName());
@@ -125,7 +126,7 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
         case SIMPLE_MEMBERS_INJECTION:
         case MEMBERS_INJECTOR:
           memberInjectionTypeGraph.addVertex(methodDescriptor);
-          TypeMirrorWrapper wrapper = new TypeMirrorWrapper(methodDescriptor.type());
+          Equivalence.Wrapper<TypeMirror> wrapper = MoreTypes.equivalence().wrap(methodDescriptor.type());
           memberInjectionMethodsTypeDescriptorMap.put(wrapper, methodDescriptor);
 
           for (ComponentMethodDescriptor pendingChild : potentialPendingEdges.get(wrapper)) {
@@ -138,7 +139,7 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
           List<TypeMirror> parents = new ArrayList<>(typeElement.getInterfaces());
           parents.add(typeElement.getSuperclass());
           for (TypeMirror parent : parents) {
-            TypeMirrorWrapper parentWrapper = new TypeMirrorWrapper(parent);
+            Equivalence.Wrapper<TypeMirror> parentWrapper = MoreTypes.equivalence().wrap(parent);
             ComponentMethodDescriptor parentDescriptor = memberInjectionMethodsTypeDescriptorMap.get(parentWrapper);
             if (parentDescriptor == null) {
               potentialPendingEdges.put(parentWrapper, methodDescriptor);
@@ -234,33 +235,6 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
         return false;
       default:
         throw new AssertionError();
-    }
-  }
-
-  class TypeMirrorWrapper {
-    private final TypeMirror typeMirror;
-
-    TypeMirrorWrapper(TypeMirror typeMirror) {
-      this.typeMirror = typeMirror;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-
-      TypeMirrorWrapper that = (TypeMirrorWrapper) o;
-
-      return processingEnv.getTypeUtils().isSameType(typeMirror, that.typeMirror);
-    }
-
-    @Override
-    public int hashCode() {
-      return typeMirror == null ? 0 : typeMirror.hashCode();
     }
   }
 }
