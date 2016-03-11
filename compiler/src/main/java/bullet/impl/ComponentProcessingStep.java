@@ -23,6 +23,7 @@ import java.io.StringWriter;
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,8 +35,11 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 
 import com.google.auto.common.BasicAnnotationProcessor;
@@ -59,6 +63,7 @@ import com.squareup.javapoet.TypeSpec;
 import com.squareup.javapoet.TypeVariableName;
 
 import org.jgrapht.DirectedGraph;
+import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultDirectedGraph;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.traverse.TopologicalOrderIterator;
@@ -95,10 +100,10 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
   private void generateObjectGraph(TypeElement element) {
     DeclaredType component = MoreTypes.asDeclared(element.asType());
     ArrayList<ComponentMethodDescriptor> provisionMethods = new ArrayList<>();
-    DirectedGraph<ComponentMethodDescriptor, DefaultEdge> memberInjectionTypeGraph =
+    DirectedGraph<Equivalence.Wrapper<TypeMirror>, DefaultEdge> memberInjectionTypeGraph =
         new DefaultDirectedGraph<>(DefaultEdge.class);
     Map<Equivalence.Wrapper<TypeMirror>, ComponentMethodDescriptor> memberInjectionMethodsTypeDescriptorMap = new HashMap<>();
-    Multimap<Equivalence.Wrapper<TypeMirror>, ComponentMethodDescriptor> potentialPendingEdges = HashMultimap.create();
+    Multimap<Equivalence.Wrapper<TypeMirror>, Equivalence.Wrapper<TypeMirror>> pendingEdges = HashMultimap.create();
 
     PackageElement packageElement = processingEnv.getElementUtils().getPackageOf(element);
     TypeElement objectElement = processingEnv.getElementUtils().getTypeElement(Object.class.getCanonicalName());
@@ -125,13 +130,14 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
           break;
         case SIMPLE_MEMBERS_INJECTION:
         case MEMBERS_INJECTOR:
-          memberInjectionTypeGraph.addVertex(methodDescriptor);
-          Equivalence.Wrapper<TypeMirror> wrapper = MoreTypes.equivalence().wrap(methodDescriptor.type());
-          memberInjectionMethodsTypeDescriptorMap.put(wrapper, methodDescriptor);
+          Equivalence.Wrapper<TypeMirror> typeMirrorWrapper = MoreTypes.equivalence().wrap(methodDescriptor.type());
+          memberInjectionTypeGraph.addVertex(typeMirrorWrapper);
+          memberInjectionMethodsTypeDescriptorMap.put(typeMirrorWrapper, methodDescriptor);
 
-          for (ComponentMethodDescriptor pendingChild : potentialPendingEdges.get(wrapper)) {
-            memberInjectionTypeGraph.addEdge(pendingChild, methodDescriptor);
+          for (Equivalence.Wrapper<TypeMirror> pendingChild : pendingEdges.get(typeMirrorWrapper)) {
+            memberInjectionTypeGraph.addEdge(pendingChild, typeMirrorWrapper);
           }
+          pendingEdges.removeAll(typeMirrorWrapper);
 
           DeclaredType declaredType = MoreTypes.asDeclared(methodDescriptor.type());
           TypeElement typeElement = MoreElements.asType(declaredType.asElement());
@@ -140,16 +146,28 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
           parents.add(typeElement.getSuperclass());
           for (TypeMirror parent : parents) {
             Equivalence.Wrapper<TypeMirror> parentWrapper = MoreTypes.equivalence().wrap(parent);
-            ComponentMethodDescriptor parentDescriptor = memberInjectionMethodsTypeDescriptorMap.get(parentWrapper);
-            if (parentDescriptor == null) {
-              potentialPendingEdges.put(parentWrapper, methodDescriptor);
+            if (memberInjectionMethodsTypeDescriptorMap.containsKey(parentWrapper)) {
+              memberInjectionTypeGraph.addEdge(typeMirrorWrapper, parentWrapper);
             } else {
-              memberInjectionTypeGraph.addEdge(methodDescriptor, parentDescriptor);
+              pendingEdges.put(parentWrapper, typeMirrorWrapper);
             }
           }
           break;
         default:
           throw new AssertionError();
+      }
+    }
+
+    Set<Equivalence.Wrapper<TypeMirror>> memberInjectionTypes = new HashSet<>(memberInjectionTypeGraph.vertexSet());
+    Set<Equivalence.Wrapper<TypeMirror>> pendingTypes = pendingEdges.keySet();
+
+    Types typeUtils = processingEnv.getTypeUtils();
+    Elements elementUtils = processingEnv.getElementUtils();
+    TypeMirror objectType = elementUtils.getTypeElement("java.lang.Object").asType();
+
+    for (Equivalence.Wrapper<TypeMirror> pendingType : pendingTypes) {
+      if (!memberInjectionTypeGraph.containsVertex(pendingType)) {
+        addTypesToGraphInDfs(pendingType, memberInjectionTypeGraph, typeUtils, objectType);
       }
     }
 
@@ -195,16 +213,19 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
         .addTypeVariable(t)
         .returns(t)
         .addParameter(t, "instance", FINAL);
-    TopologicalOrderIterator<ComponentMethodDescriptor, DefaultEdge> topologicalOrderIterator =
+    TopologicalOrderIterator<Equivalence.Wrapper<TypeMirror>, DefaultEdge> topologicalOrderIterator =
         new TopologicalOrderIterator<>(memberInjectionTypeGraph);
     while (topologicalOrderIterator.hasNext()) {
-      ComponentMethodDescriptor method = topologicalOrderIterator.next();
-      injectWriter.addCode(
-          "if (instance instanceof $T) {\n$>" +
-          "this.component.$N$L(($T) instance);\n" +
-          "return instance;\n" +
-          "$<}\n",
-          method.type(), method.name(), method.kind() == ComponentMethodKind.MEMBERS_INJECTOR ? "().injectMembers" : "", method.type());
+      Equivalence.Wrapper<TypeMirror> typeMirrorWrapper = topologicalOrderIterator.next();
+      if (memberInjectionTypes.contains(typeMirrorWrapper)) {
+        ComponentMethodDescriptor method = memberInjectionMethodsTypeDescriptorMap.get(typeMirrorWrapper);
+        injectWriter.addCode(
+            "if (instance instanceof $T) {\n$>" +
+                "this.component.$N$L(($T) instance);\n" +
+                "return instance;\n" +
+                "$<}\n",
+            method.type(), method.name(), method.kind() == ComponentMethodKind.MEMBERS_INJECTOR ? "().injectMembers" : "", method.type());
+      }
     }
     // TODO: exception message
     injectWriter.addCode("throw new $T();\n", IllegalArgumentException.class);
@@ -221,6 +242,36 @@ class ComponentProcessingStep implements BasicAnnotationProcessor.ProcessingStep
       ioe.printStackTrace(pw);
       pw.close();
       processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, sw.toString());
+    }
+  }
+
+  private void addTypesToGraphInDfs(Equivalence.Wrapper<TypeMirror> typeMirrorWrapper,
+                                    Graph<Equivalence.Wrapper<TypeMirror>, DefaultEdge> graph,
+                                    Types typeUtils,
+                                    TypeMirror objectType) {
+    TypeMirror typeMirror = typeMirrorWrapper.get();
+
+    @SuppressWarnings("ConstantConditions")
+    DeclaredType declaredType = MoreTypes.asDeclared(typeMirror); // FIXME: "none" is arriving here, and it doesn't come from recursion
+    TypeElement typeElement = MoreElements.asType(declaredType.asElement());
+
+    graph.addVertex(typeMirrorWrapper);
+
+    List<TypeMirror> parents = new ArrayList<>(typeElement.getInterfaces());
+    TypeMirror parentSuperclass = typeElement.getSuperclass();
+    if (!typeUtils.isSameType(parentSuperclass, objectType)
+        && !typeUtils.isSameType(parentSuperclass, typeUtils.getNoType(TypeKind.NONE))) {
+      parents.add(parentSuperclass);
+    }
+
+    for (TypeMirror parent : parents) {
+      if (!typeUtils.isSameType(parent, typeUtils.getNoType(TypeKind.NONE))) {
+        Equivalence.Wrapper<TypeMirror> parentWrapper = MoreTypes.equivalence().wrap(parent);
+        if (!graph.containsVertex(parentWrapper)) {
+          graph.addEdge(typeMirrorWrapper, parentWrapper);
+          addTypesToGraphInDfs(parentWrapper, graph, typeUtils, objectType);
+        }
+      }
     }
   }
 
