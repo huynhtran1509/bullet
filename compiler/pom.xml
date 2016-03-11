@@ -80,7 +80,6 @@
               <exclude>com.google.auto.service:auto-service</exclude>
               <exclude>com.google.auto.value:auto-value</exclude>
               <exclude>com.google.dagger:dagger</exclude>
-              <exclude>com.google.guava</exclude>
               <exclude>javax.inject:javax.inject</exclude>
             </excludes>
           </artifactSet>
